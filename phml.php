@@ -2,6 +2,8 @@
 
 namespace Phml;
 
+ini_set('display_errors', '1');
+
 class Engine {
 
   protected $cache_dir;
@@ -15,7 +17,7 @@ class Engine {
 
   public function render($template_path) {
     $template = new Template($template_path);
-    return (string) $template;
+    return $template->render();;
   }
 
 }
@@ -50,132 +52,151 @@ class Template {
       echo $line;
 
       $line = new Line(++$num, $line);
+
+      # skip blank lines
+      if($line->blank()) continue;
+
       $this->check_indentation($prev_line, $line);
       $this->manage_stack($line);
 
       switch(true) {
-        case $line->type == 'ignore':
-          break;
-        case $line->block_content():
-          $this->buffer_str($line->indent, $line->opening());
+        case $line->no_content():
+          $this->buffer_str($line->indent, $line->open);
           $this->stack[] = $line;
           break;
         default:
-          $this->buffer_str($line->indent, (string) $line);
+          $this->buffer_str($line->indent, $line->render());
       }
 
       $prev_line = $line;
 
     }
     fclose($template);
-
     $this->empty_stack();
-
   }
 
   protected function check_indentation($prev_line, $line) {
     if($prev_line) {
       $max_indent = $prev_line->indent;
-      $max_indent += $prev_line->block_content() ? 1 : 0;
+      $max_indent += $prev_line->no_content() ? 1 : 0;
     } else {
       $max_indent = 0;
     }
     if($line->indent > $max_indent)
-      throw new Exception("invalid indentation on line {$line->num}");
+      throw new \Exception("invalid indentation on line {$line->num}");
   }
 
-  protected function manage_stack(&$line) {
-    $stack_count = count($this->stack);
-    if($stack_count == 0) return;
-    $top = $this->stack[$stack_count - 1];
-    if($line->indent == $top->indent) {
-      $this->buffer_str($top->indent, $top->closing());
-      array_pop($this->stack);
+  protected function manage_stack($line) {
+    while($this->is_empty() == false) {
+      if($line->indent <= $this->top()->indent) {
+        $this->pop();
+      } else {
+        break;
+      }
     }
+  }
+
+  protected function is_empty() {
+    return count($this->stack) == 0;
+  }
+
+  protected function top() {
+    $count = count($this->stack);
+    return $count > 0 ? $this->stack[$count - 1] : null;
+  }
+
+  protected function pop() {
+    $top = array_pop($this->stack);
+    $this->buffer_str($top->indent, $top->close);
   }
 
   protected function empty_stack() {
-#print_r($this->buffer);
-#print_r($this->stack);
-    $stack_count = count($this->stack);
-    while($stack_count > 0) {
-      $line = array_pop($this->stack);
-      $this->buffer_str($line->indent, $line->closing());
-      --$stack_count;
-    }
+    while($this->is_empty() == FALSE)
+      $this->pop();
   }
 
   protected function buffer_str($indent, $str) {
     $this->buffer[] = str_repeat('  ', $indent) . $str;
   }
 
-  public function __toString() {
-    return $this->render();
-  }
-
 }
 
 class Line {
 
+  const DOCTYPE = '/^!!!(\s+(.+))?$/';
+  const HTML_COMMENT = '/^\/(\s+(.+))?$/';
+  #const HTML_ELEMENT = '/^(%([a-z]\w*))?(#([a-z]\w*))?((\.[a-z]\w*)*)?(\s+(.+))?$/i';
+  const HTML_ELEMENT = '/^(%([a-z]\w*))?(#([a-z]\w*))?((\.[a-z]\w*)*)?(\s+(.+))?(\(.+\))?(\/)?$/i';
+
   public $num;
   public $indent;
   public $line;
+
   public $type;
+
+  public $open = NULL;
   public $content = NULL;
+  public $close = NULL;
 
   public function __construct($num, $line) {
-    # TODO : validate the indentation is correct (2 spaces, not tabs, etc)
-    $line = rtrim($line);
-    $spaces = strspn($line, ' ');
-    $line = ltrim($line);
     $this->num = $num;
-    $this->indent = $spaces / 2;
+    $line = rtrim($line);
+    # TODO : validate the indentation
+    $this->indent = strspn($line, ' ') / 2;
+    $line = ltrim($line);
     $this->line = $line;
-    $this->determine_type();
+    $this->parse_line();
   }
 
-  public function block_content() {
+  public function blank() {
+    return $this->type == 'ignore';
+  }
+
+  public function no_content() {
     return $this->content == NULL;
   }
 
-  public function opening() {
-    switch($this->type) {
-      case 'html_comment':  
-        return '<!-- ';
-    }
-  }
-
-  public function closing() {
-    switch($this->type) {
-      case 'html_comment':  
-        return ' -->';
-    }
-  }
-
-  protected function determine_type() {
+  protected function parse_line() {
     $line = $this->line;
     switch(true) {
 
       # phml comments and blank lines 
       case $this->begins_with('-#');
-      case $line == '':kk
+      case $line == '':
         $this->type = 'ignore';
         break;
 
-      ## html comment
-      case preg_match('/^\/\s*(.+)?$/', $line, $matches):
-        $this->type = 'html_comment';
-        $this->content = isset($matches[1]) ? $matches[1] : NULL;
+      ## doctype
+      #case $line == '!!!':
+      case preg_match(self::DOCTYPE, $line, $matches):
+        # TODO : add other doctypes
+        $this->type = 'doctype';
+        $this->content = '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">';
         break;
 
-      # html element
+      ## html comment
+      case preg_match(self::HTML_COMMENT, $line, $matches):
+        $this->type = 'html_comment';
+        $this->open = '<!-- ';
+        $this->content = isset($matches[2]) ? $matches[2] : NULL;
+        $this->close = ' -->';
+        break;
 
-      case preg_match('/^%([a-zA-Z]+)(\s+(.+))?/', $line, $matches):
-      #case $line[0] == '%':
-      #case $line[0] == '#':
-      #case $line[0] == '.':
-        $this->type = 'html_elemnent';
-        $this->content = isset($matches[3]) ? $matches[3] : NULL;
+      ## html element
+      case preg_match(self::HTML_ELEMENT, $line, $matches):
+        $this->type = 'html_element';
+
+        $tag = $matches[2] ? $matches[2] : 'div';
+        # TODO : support auto self closing tags
+        $self_closing = $matches[9] == '/';
+
+        $attr = array();
+        if($matches[4]) $attr['id'] = $matches[4];
+        if($matches[5]) $attr['class'] = $matches[5];
+        if($matches[9]) $attr['other'] = $matches[9];
+        $this->open = $this->tag($tag, $attr);
+        $this->content = isset($matches[8]) ? $matches[8] : NULL;
+        $this->close = "</$tag>";
         break;
 
       # phml comment
@@ -200,26 +221,33 @@ class Line {
 
       # static text
       default:
-        $this->type = 'static';
+        $this->type = 'content';
         $this->content = $line;
         break;
     }
+  }
+
+  protected function tag($name, $attributes) {
+    $attr = '';
+    foreach($attributes as $k => $v)
+      $attr .= " $k='$v'";
+    return "<$name{$attr}>";
   }
 
   protected function begins_with($search) {
     return (strncmp($this->line, $search, strlen($search)) == 0);
   }
 
-  public function __toString() {
-    return $this->opening() . $this->content . $this->closing();
+  public function render() {
+    return trim("{$this->open}{$this->content}{$this->close}");
   }
 
 }
 
-$t = '/Users/trowe/projects/divinginfocus/app/views/index/index.html.phml';
+$t = '/Users/trowe/projects/pippa/app/views/index/index.html.phml';
 
 $phml_engine = new Engine('foo');
 $output = $phml_engine->render($t);
-echo "\n============================================\n\n";
+echo "============================================\n";
 echo $output;
-echo "\n\n";
+echo "\n";
