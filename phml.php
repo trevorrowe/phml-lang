@@ -24,7 +24,7 @@ class Engine {
 
 class Template {
 
-  protected $template_path;
+  protected $path;
   
   protected $indent = 0;
   protected $stack = array();
@@ -32,7 +32,7 @@ class Template {
   
   public function __construct($template_path) {
     # TODO : raise an exception if the template is not readable or not found
-    $this->template_path = $template_path;
+    $this->path = $template_path;
   }
 
   public function render() {
@@ -41,24 +41,17 @@ class Template {
   }
 
   protected function parse() {
-
     $num = 0;
     $prev_line = NULL;
-
-    $template = fopen($this->template_path, 'r');
+    $template = fopen($this->path, 'r');
     while(!feof($template)) {
-
       $line = fgets($template);
-      echo $line;
-
+      #echo $line;
       $line = new Line(++$num, $line);
-
       # skip blank lines
       if($line->blank()) continue;
-
       $this->check_indentation($prev_line, $line);
       $this->manage_stack($line);
-
       switch(true) {
         case $line->no_content():
           $this->buffer_str($line->indent, $line->open);
@@ -67,12 +60,11 @@ class Template {
         default:
           $this->buffer_str($line->indent, $line->render());
       }
-
       $prev_line = $line;
-
     }
     fclose($template);
-    $this->empty_stack();
+    while($this->stack_empty() == FALSE)
+      $this->pop();
   }
 
   protected function check_indentation($prev_line, $line) {
@@ -87,16 +79,15 @@ class Template {
   }
 
   protected function manage_stack($line) {
-    while($this->is_empty() == false) {
-      if($line->indent <= $this->top()->indent) {
+    while($this->stack_empty() == false) {
+      if($line->indent <= $this->top()->indent)
         $this->pop();
-      } else {
+      else
         break;
-      }
     }
   }
 
-  protected function is_empty() {
+  protected function stack_empty() {
     return count($this->stack) == 0;
   }
 
@@ -110,11 +101,6 @@ class Template {
     $this->buffer_str($top->indent, $top->close);
   }
 
-  protected function empty_stack() {
-    while($this->is_empty() == FALSE)
-      $this->pop();
-  }
-
   protected function buffer_str($indent, $str) {
     $this->buffer[] = str_repeat('  ', $indent) . $str;
   }
@@ -125,8 +111,8 @@ class Line {
 
   const DOCTYPE = '/^!!!(\s+(.+))?$/';
   const HTML_COMMENT = '/^\/(\s+(.+))?$/';
-  #const HTML_ELEMENT = '/^(%([a-z]\w*))?(#([a-z]\w*))?((\.[a-z]\w*)*)?(\s+(.+))?$/i';
-  const HTML_ELEMENT = '/^(%([a-z]\w*))?(#([a-z]\w*))?((\.[a-z]\w*)*)?(\s+(.+))?(\(.+\))?(\/)?$/i';
+  #const HTML_ELEMENT = '/^(%[a-z]\w*)?(#[a-z]\w*)?(\.[a-z][\.\w]*)?(\(.+\))?((=|\/)? (.+))?$/i';
+  const HTML_ELEMENT = '/^(%[a-z]\w*)?(#[a-z]\w*)?(\.[a-z][\.\w]*)?(\(.+\))?((=|\/)? (.+))?$/i';
 
   public $num;
   public $indent;
@@ -146,6 +132,10 @@ class Line {
     $line = ltrim($line);
     $this->line = $line;
     $this->parse_line();
+  }
+
+  public function closed() {
+    #return $this->content != NULL || 
   }
 
   public function blank() {
@@ -183,19 +173,25 @@ class Line {
         break;
 
       ## html element
+      # meta, img, link, script, br, and hr tags are closed by default.
       case preg_match(self::HTML_ELEMENT, $line, $matches):
+
         $this->type = 'html_element';
+        #print_r($matches);
+        #exit;
 
-        $tag = $matches[2] ? $matches[2] : 'div';
+        $tag = $matches[1] ? ltrim($matches[1], '%') : 'div';
+        if($matches[2]) $id = ltrim($matches[2], '#');
+        if($matches[3]) $class = str_replace('.', ' ', ltrim($matches[3], '.'));
+        if($matches[4]) $attrs = trim($matches[4], '()');
+
+        $php = $matches['5'] == '=';
+
         # TODO : support auto self closing tags
-        $self_closing = $matches[9] == '/';
+        # TODO : meta, img, link, script, br and hr tags should auto-self-close
 
-        $attr = array();
-        if($matches[4]) $attr['id'] = $matches[4];
-        if($matches[5]) $attr['class'] = $matches[5];
-        if($matches[9]) $attr['other'] = $matches[9];
-        $this->open = $this->tag($tag, $attr);
-        $this->content = isset($matches[8]) ? $matches[8] : NULL;
+        $this->open = $this->tag($tag, $id, $class, $attrs);
+        $this->content = isset($matches[7]) ? $matches[7] : NULL;
         $this->close = "</$tag>";
         break;
 
@@ -227,10 +223,11 @@ class Line {
     }
   }
 
-  protected function tag($name, $attributes) {
+  protected function tag($name, $id, $class, $attrs) {
     $attr = '';
-    foreach($attributes as $k => $v)
-      $attr .= " $k='$v'";
+    if($id) $attr .= " id='$id'";
+    if($class) $attr .= " class='$class'";
+    if($attrs) $attr .= " $attrs";
     return "<$name{$attr}>";
   }
 
@@ -244,10 +241,9 @@ class Line {
 
 }
 
-$t = '/Users/trowe/projects/pippa/app/views/index/index.html.phml';
+$t = 'template.phml';
 
-$phml_engine = new Engine('foo');
+$phml_engine = new \Phml\Engine('foo');
 $output = $phml_engine->render($t);
-echo "============================================\n";
 echo $output;
 echo "\n";
