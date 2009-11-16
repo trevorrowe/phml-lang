@@ -45,10 +45,7 @@ class Template {
     $prev_line = NULL;
     $template = fopen($this->path, 'r');
     while(!feof($template)) {
-      $line = fgets($template);
-      #echo $line;
-      $line = new Line(++$num, $line);
-      # skip blank lines
+      $line = new Line(++$num, fgets($template));
       if($line->blank()) continue;
       $this->check_indentation($prev_line, $line);
       $this->manage_stack($line);
@@ -111,7 +108,6 @@ class Line {
 
   const DOCTYPE = '/^!!!(\s+(.+))?$/';
   const HTML_COMMENT = '/^\/(\s+(.+))?$/';
-  #const HTML_ELEMENT = '/^(%[a-z]\w*)?(#[a-z]\w*)?(\.[a-z][\.\w]*)?(\(.+\))?((=|\/)? (.+))?$/i';
   const HTML_ELEMENT = '/^(%[a-z]\w*)?(#[a-z]\w*)?(\.[a-z][\.\w]*)?(\(.+\))?((=|\/)? (.+))?$/i';
 
   public $num;
@@ -125,7 +121,9 @@ class Line {
   public $close = NULL;
 
   public function __construct($num, $line) {
+
     $this->num = $num;
+
     $line = rtrim($line);
     # TODO : validate the indentation
     $this->indent = strspn($line, ' ') / 2;
