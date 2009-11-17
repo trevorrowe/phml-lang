@@ -1,18 +1,18 @@
 !!! 1.0
-
 %html
   %head
     %title phml-lang test
-    %link(type='text/css' href='/foo.css' charset='utf-8') /
+    %link(type='text/css' href='/foo.css' charset='utf-8')/
   %body
     -# phml this comment should not appear in the output
     / this comment should appear in the the output
-    #header
+    %div#header.class1.class2(onclick="alert(1);")
       %h1 Page Title
-      /
-        Just testing nested block content
-        that span multiple lines
+      - if(true)
+        %h2 Welcome back
     #body
+      (onclick='alert("clicked")')
+        %p this div required no %div or #id or .class
       %form(method='post' action='')
         %fieldset
           %legend Sample Form
@@ -22,5 +22,6 @@
     #footer
       %dl#navigation.menu.with.many.classes
         %dt Menu
-        %dd Submenu 1
-        %dd Submenu 2
+        - foreach($options as $option)
+          %dd
+            = $option

@@ -1,28 +1,33 @@
 <?php
 
-namespace Phml;
+# TODO : need to separate the output indentation from the nesting
+#
+# - TODO : support if/else if/else
+# - TODO : support switch with case
+# - a line could have both ->nesting and ->indent
+# - certain lines require not indent (like php flow control statements)
+#   while still effecting nesting for parsing
+#
+#   - if(cond_a())
+#     %p bar
+#
+# TODO : some elements REQUIRE nested elements, like flow control statements
+# TODO : some elements self close (br, hr, link, meta, etc)
+# TODO : should self closing elements allow nested content?
+# TODO : only allow $variables and function() calls structures like:
+#
+#   = $foo_variable()
+#   = foo_function()
+#   = $foo_function_varaiable()
+#   = foo_function_with_args($foo, $bar)
+#   = foo_function_with_args(foo(), bar())
+#   = foo_function_with_args($foo(), $bar())
+#   = foo_function_with_args($foo($yuck), $bar())
+#
+# TODO : decide how to render the template w/out caching it anywhere
+#
 
-ini_set('display_errors', '1');
-
-class Engine {
-
-  protected $cache_dir;
-  protected $cache = false;
-
-  public function __construct($cache_dir, $options = array()) {
-    $this->cache_dir = $cache_dir;
-    if(isset($options['cache']))
-      $this->cache = $options['cache'];
-  }
-
-  public function render($template_path) {
-    $template = new Template($template_path);
-    return $template->render();;
-  }
-
-}
-
-class Template {
+class PhmlTemplate {
 
   protected $path;
   
@@ -45,7 +50,7 @@ class Template {
     $prev_line = NULL;
     $template = fopen($this->path, 'r');
     while(!feof($template)) {
-      $line = new Line(++$num, fgets($template));
+      $line = new PhmlLine(++$num, fgets($template));
       if($line->blank()) continue;
       $this->check_indentation($prev_line, $line);
       $this->manage_stack($line);
@@ -72,7 +77,7 @@ class Template {
       $max_indent = 0;
     }
     if($line->indent > $max_indent)
-      throw new \Exception("invalid indentation on line {$line->num}");
+      throw new Exception("invalid indentation on line {$line->num}");
   }
 
   protected function manage_stack($line) {
@@ -104,11 +109,15 @@ class Template {
 
 }
 
-class Line {
+class PhmlLine {
 
   const DOCTYPE = '/^!!!(\s+(.+))?$/';
   const HTML_COMMENT = '/^\/(\s+(.+))?$/';
-  const HTML_ELEMENT = '/^(%[a-z]\w*)?(#[a-z]\w*)?(\.[a-z][\.\w]*)?(\(.+\))?((=|\/)? (.+))?$/i';
+  const HTML_ELEMENT = '/^(%[a-z]\w*)?(#[a-z]\w*)?(\.[a-z][\.\w]*)?(\(.+\))?(\s*\/|=\s*|\s+.+|)$/i';
+  const PHP_FLOW = '/^- (if|foreach)(\(.+\))$/';
+
+  const PHP_OPEN = '<?php';
+  const PHP_CLOSE = '?>';
 
   public $num;
   public $indent;
@@ -149,8 +158,8 @@ class Line {
     switch(true) {
 
       # phml comments and blank lines 
-      case $this->begins_with('-#');
       case $line == '':
+      case $this->begins_with('-#');
         $this->type = 'ignore';
         break;
 
@@ -173,23 +182,28 @@ class Line {
       ## html element
       # meta, img, link, script, br, and hr tags are closed by default.
       case preg_match(self::HTML_ELEMENT, $line, $matches):
-
         $this->type = 'html_element';
-        #print_r($matches);
-        #exit;
 
         $tag = $matches[1] ? ltrim($matches[1], '%') : 'div';
         if($matches[2]) $id = ltrim($matches[2], '#');
         if($matches[3]) $class = str_replace('.', ' ', ltrim($matches[3], '.'));
         if($matches[4]) $attrs = trim($matches[4], '()');
 
-        $php = $matches['5'] == '=';
-
         # TODO : support auto self closing tags
         # TODO : meta, img, link, script, br and hr tags should auto-self-close
+        
+        $content = ltrim($matches[5]);
+        if($content == '') {
+
+        } else if($content[0] == '/') {
+          $self_closing = true;
+        } else if($content[0] == '=') {
+          $this->content = "<?php echo($content); %>";
+        } else {
+          $this->content = $content;
+        }
 
         $this->open = $this->tag($tag, $id, $class, $attrs);
-        $this->content = isset($matches[7]) ? $matches[7] : NULL;
         $this->close = "</$tag>";
         break;
 
@@ -197,16 +211,24 @@ class Line {
       case $this->begins_with('-#'):
         break;
 
-      # - if
-      # - while
-      # - foreach
-      # - switch
-      # - etc
+      # php flow control statements
+      # TODO : add else, else if, do, while, switch, foreach, for
+      case preg_match(self::PHP_FLOW, $line, $matches):
+        $type = 'php_flow';
+        $flow = $matches[1];
+        $cond = trim($matches[2], '()');
+        $this->open = $this->php_wrap("$flow($cond):");
+        $this->close = $this->php_wrap("end$flow;");
+        break;
 
       # interpreted as php
       case $line[0] == '-':
-      case $line[0] == '=':
-      case $line[0] == '~':
+        $type = 'php';
+        break;
+
+      case preg_match('/^=\s+(.+)$/', $line, $matches):
+        $type = 'php_echo';
+        $this->content = $this->php_wrap("echo({$matches[1]});");
         break;
 
       # markup switch
@@ -214,11 +236,17 @@ class Line {
         break;
 
       # static text
+      # TODO : support $variable interpolation
+      # TODO : support {$variable} interpolation
       default:
         $this->type = 'content';
         $this->content = $line;
         break;
     }
+  }
+
+  protected function php_wrap($str) {
+    return self::PHP_OPEN . ' ' . $str . ' ' . self::PHP_CLOSE;
   }
 
   protected function tag($name, $id, $class, $attrs) {
@@ -239,9 +267,16 @@ class Line {
 
 }
 
-$t = 'template.phml';
+ini_set('display_errors', '1');
 
-$phml_engine = new \Phml\Engine('foo');
-$output = $phml_engine->render($t);
-echo $output;
+$options = array('abc', 'xyz', '123');
+
+$template = new PhmlTemplate('template.phml');
+echo $template->render();
 echo "\n";
+
+#ob_start();
+#eval('?' . '>' . $template->render());
+#echo ob_get_clean();
+
+
